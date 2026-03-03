@@ -1,0 +1,35 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Large model files (too big for git — 1GB+)
+models/spice_price_model.joblib
+
+# Large data files
+data/prepared_spice_data.csv
+data/may_and_june_2025.csv
+data/ts_model_eval.png
+data/ts_price_traces.png
+data/*.png
+models/*.png
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.ipynb_checkpoints/
+*.egg-info/
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# notebooks also
+notebooks/

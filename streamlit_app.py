@@ -1,6 +1,6 @@
 """
-Turmerix — Indian Spice Price Forecast
-Streamlit Community Cloud app
+Turmerix — Indian Spice Market Dashboard
+MoneyControl-style market overview + forecast app
 """
 
 import json
@@ -13,9 +13,10 @@ import streamlit as st
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Turmerix — Spice Price Forecast",
+    page_title="Turmerix — Spice Market",
     page_icon="🌶️",
     layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -26,12 +27,68 @@ DATA_PATH  = BASE_DIR / "data"   / "daily_spice_timeseries.csv"
 
 PRESET_HORIZONS = {"7d": 7, "1m": 30, "3m": 90, "1y": 365}
 
-SIGNAL_COLOR = {
-    "BUY / HOLD STOCK": "🟢",
-    "SELL / LIQUIDATE": "🔴",
-    "HOLD":             "🟡",
+SPICE_EMOJI = {
+    "Cardamom": "💚", "Cumin": "🟤", "Turmeric": "🟡", "Black Pepper": "⚫",
+    "Cloves": "🟫", "Ginger": "🫚", "Cinnamon": "🟠", "Saffron": "🔶",
+    "Chilli": "🌶️", "Red Chilli": "🌶️", "Chilli Powder": "🌶️",
+    "Coffee": "☕", "Tea": "🍵", "Coriander": "🌿", "Fennel": "🌿",
+    "Fenugreek": "🌿", "Mustard": "🟡", "Pepper": "⚫", "Vanilla": "🤍",
 }
-TREND_ICON = {"upward": "📈", "downward": "📉", "sideways": "➡️"}
+
+# ── Custom CSS ────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+/* Top header bar */
+.market-header {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+    padding: 1rem 1.5rem 0.75rem;
+    border-radius: 12px;
+    margin-bottom: 1rem;
+}
+.market-header h1 { color: #e94560; margin: 0; font-size: 1.6rem; }
+.market-header p  { color: #a8b2d8; margin: 0.2rem 0 0; font-size: 0.85rem; }
+
+/* Ticker strip */
+.ticker-wrap {
+    background: #0d0d1a;
+    border: 1px solid #1e3a5f;
+    border-radius: 8px;
+    padding: 0.5rem 1rem;
+    overflow: hidden;
+    white-space: nowrap;
+    margin-bottom: 1rem;
+}
+.ticker-item { display: inline-block; margin-right: 2.5rem; font-size: 0.82rem; }
+.ticker-name { color: #a8b2d8; font-weight: 600; }
+.ticker-price { color: #e2e8f0; margin: 0 0.3rem; }
+.ticker-up   { color: #22c55e; }
+.ticker-down { color: #ef4444; }
+.ticker-flat { color: #94a3b8; }
+
+/* KPI cards */
+.kpi-card {
+    background: linear-gradient(145deg, #1e2a3a, #162032);
+    border: 1px solid #2d4a6e;
+    border-radius: 10px;
+    padding: 1rem 1.2rem;
+    text-align: center;
+}
+.kpi-label { color: #64748b; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.kpi-value { color: #e2e8f0; font-size: 1.4rem; font-weight: 700; margin: 0.2rem 0; }
+.kpi-delta-up   { color: #22c55e; font-size: 0.82rem; }
+.kpi-delta-down { color: #ef4444; font-size: 0.82rem; }
+.kpi-delta-flat { color: #94a3b8; font-size: 0.82rem; }
+
+/* Signal banners */
+.signal-buy  { background: #052e16; border-left: 4px solid #22c55e; padding: 0.75rem 1rem; border-radius: 6px; color: #86efac; }
+.signal-sell { background: #2d0606; border-left: 4px solid #ef4444; padding: 0.75rem 1rem; border-radius: 6px; color: #fca5a5; }
+.signal-hold { background: #1c1a05; border-left: 4px solid #eab308; padding: 0.75rem 1rem; border-radius: 6px; color: #fde047; }
+
+/* Market table rows */
+.up-row   { color: #22c55e !important; }
+.down-row { color: #ef4444 !important; }
+</style>
+""", unsafe_allow_html=True)
 
 
 # ── Loaders ───────────────────────────────────────────────────────────────────
@@ -43,49 +100,79 @@ def load_model():
 
 
 @st.cache_data(show_spinner="Loading dataset…")
-def load_data():
+def load_data() -> pd.DataFrame:
     return pd.read_csv(DATA_PATH, parse_dates=["date"])
 
 
-# ── Forecast helpers ──────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
 def resolve_horizon(h: str) -> int:
     return PRESET_HORIZONS[h] if h in PRESET_HORIZONS else int(h)
+
+
+def fmt_price(v: float) -> str:
+    return f"₹{v:,.2f}"
+
+
+def fmt_pct(v: float) -> str:
+    return f"{v:+.2f}%"
+
+
+def pct_color(v: float) -> str:
+    if v > 0.5:  return "ticker-up"
+    if v < -0.5: return "ticker-down"
+    return "ticker-flat"
+
+
+def pct_arrow(v: float) -> str:
+    if v > 0.5:  return "▲"
+    if v < -0.5: return "▼"
+    return "─"
 
 
 def buysell_signal(total_pct: float, spice_mape: float) -> dict:
     band = spice_mape * 0.5
     if abs(total_pct) < band:
-        return {
-            "signal": "HOLD",
-            "reason": (
-                f"Predicted move ({total_pct:+.1f}%) is within model uncertainty "
-                f"(spice MAPE ≈ {spice_mape:.1f}%). No confident directional signal."
-            ),
-        }
+        return {"signal": "HOLD", "icon": "🟡",
+                "reason": f"Predicted move ({total_pct:+.1f}%) is within model uncertainty (MAPE ≈ {spice_mape:.1f}%). No confident directional signal."}
     if total_pct > 0:
-        return {
-            "signal": "BUY / HOLD STOCK",
-            "reason": (
-                f"Price predicted to rise {total_pct:+.1f}% over the horizon. "
-                f"Consider buying or holding inventory. (Spice MAPE ≈ {spice_mape:.1f}%)"
-            ),
-        }
-    return {
-        "signal": "SELL / LIQUIDATE",
-        "reason": (
-            f"Price predicted to fall {total_pct:+.1f}% over the horizon. "
-            f"Consider selling or reducing stock. (Spice MAPE ≈ {spice_mape:.1f}%)"
-        ),
-    }
+        return {"signal": "BUY / HOLD STOCK", "icon": "🟢",
+                "reason": f"Price predicted to rise {total_pct:+.1f}% over the horizon. Consider buying or holding inventory. (MAPE ≈ {spice_mape:.1f}%)"}
+    return {"signal": "SELL / LIQUIDATE", "icon": "🔴",
+            "reason": f"Price predicted to fall {total_pct:+.1f}% over the horizon. Consider selling or reducing stock. (MAPE ≈ {spice_mape:.1f}%)"}
 
 
-def run_forecast(bundle, metadata, row, spice_title, horizon_days, anchor_date_str):
+def resolve_row(df: pd.DataFrame, spice: str, anchor_date_str: str):
+    anchor_ts  = pd.Timestamp(anchor_date_str)
+    spice_rows = df[df["Spice Name"] == spice].sort_values("date")
+    if spice_rows.empty:
+        return None, None, "No data for this spice."
+    ds_start = spice_rows.iloc[0]["date"]
+    ds_end   = spice_rows.iloc[-1]["date"]
+
+    exact = spice_rows[spice_rows["date"] == anchor_ts]
+    if not exact.empty:
+        return exact.iloc[0], anchor_ts, None
+
+    if anchor_ts < ds_start:
+        return None, None, f"Date {anchor_date_str} is before dataset start ({ds_start.strftime('%Y-%m-%d')})."
+
+    if anchor_ts > ds_end:
+        row  = spice_rows.iloc[-1]
+        used = row["date"]
+        return row, used, f"⚠️ Beyond dataset end. Using latest available context: **{used.strftime('%Y-%m-%d')}**."
+
+    earlier = spice_rows[spice_rows["date"] <= anchor_ts]
+    row     = earlier.iloc[-1]
+    used    = row["date"]
+    return row, used, f"No data on {anchor_date_str}. Using nearest date: **{used.strftime('%Y-%m-%d')}**."
+
+
+def run_forecast(bundle, metadata, row, spice_title: str, horizon_days: int, anchor_date_str: str) -> dict:
     le         = bundle["label_encoder"]
     model      = bundle["model"]
     spice_enc  = int(le.transform([spice_title])[0])
     per_spice  = metadata.get("per_spice_test_mape", {})
-    test_mape  = float(metadata.get("test_mape", 0.0))
-    spice_mape = per_spice.get(spice_title, test_mape)
+    spice_mape = per_spice.get(spice_title, float(metadata.get("test_mape", 0.0)))
 
     def safe(col, default=0.0):
         val = row.get(col, default)
@@ -99,22 +186,21 @@ def run_forecast(bundle, metadata, row, spice_title, horizon_days, anchor_date_s
     r14vol = safe("rolling14_volume_kg", 0.0)
     dvol   = safe("daily_volume_kg", 0.0)
     r7avg_daily_vol = r7vol / 7.0 if r7vol > 0 else 1.0
-    ship_cnt  = safe("daily_shipment_count", 1)
-    buy_cnt   = safe("daily_buyer_count", 1)
-    exp_cnt   = safe("daily_exporter_count", 1)
+    ship_cnt = safe("daily_shipment_count", 1)
+    buy_cnt  = safe("daily_buyer_count", 1)
+    exp_cnt  = safe("daily_exporter_count", 1)
 
-    anchor_price  = lag1
-    anchor_ts     = pd.Timestamp(anchor_date_str)
-    price_window  = [lag1] * 7
+    anchor_price = lag1
+    anchor_ts    = pd.Timestamp(anchor_date_str)
+    price_window = [lag1] * 7
     forecast_days = []
 
     for step in range(1, horizon_days + 1):
-        fdate = anchor_ts + pd.Timedelta(days=step)
-        dow   = fdate.dayofweek
-        mon   = fdate.month
-        woy   = int(fdate.isocalendar()[1])
-
-        mom1d  = (lag1 / price_window[-2] - 1.0) if len(price_window) >= 2 and price_window[-2] > 0 else 0.0
+        fdate  = anchor_ts + pd.Timedelta(days=step)
+        dow    = fdate.dayofweek
+        mon    = fdate.month
+        woy    = int(fdate.isocalendar()[1])
+        mom1d  = (lag1 / price_window[-2] - 1.0) if price_window[-2] > 0 else 0.0
         mom7d  = (lag1 / lag7 - 1.0) if lag7 > 0 else 0.0
         vshock = dvol / r7avg_daily_vol if r7avg_daily_vol > 0 else 1.0
 
@@ -125,22 +211,17 @@ def run_forecast(bundle, metadata, row, spice_title, horizon_days, anchor_date_s
             float(dow), float(mon), float(woy),
         ], dtype=np.float64).reshape(1, -1)
 
-        log_pred  = model.predict(feat)[0]
-        pred_vwap = float(max(np.expm1(log_pred), 0.0))
+        pred_vwap = float(max(np.expm1(model.predict(feat)[0]), 0.0))
         pct       = (pred_vwap / anchor_price - 1.0) * 100.0
-
-        forecast_days.append({
-            "date": fdate.strftime("%Y-%m-%d"),
-            "predicted_vwap_inr": round(pred_vwap, 2),
-            "pct_change_vs_today": round(pct, 2),
-        })
+        forecast_days.append({"date": fdate.strftime("%Y-%m-%d"),
+                               "predicted_vwap_inr": round(pred_vwap, 2),
+                               "pct_change_vs_today": round(pct, 2)})
 
         if step >= 7:
             lag7 = price_window[0]
         price_window.append(pred_vwap)
         if len(price_window) > 7:
             price_window.pop(0)
-
         r7avg = float(np.mean(price_window))
         r7std = float(np.std(price_window)) if len(price_window) > 1 else 0.0
         r7avg_daily_vol = dvol
@@ -164,203 +245,438 @@ def run_forecast(bundle, metadata, row, spice_title, horizon_days, anchor_date_s
         "final_pct":    round(final_pct, 2),
         "trend":        trend,
         "signal":       sig["signal"],
+        "icon":         sig["icon"],
         "reason":       sig["reason"],
     }
 
 
-def resolve_row(df, spice, anchor_date_str):
-    """Return (row, used_date, context_note) for the given spice + date."""
-    anchor_ts  = pd.Timestamp(anchor_date_str)
-    spice_rows = df[df["Spice Name"] == spice].sort_values("date")
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB RENDERERS
+# ══════════════════════════════════════════════════════════════════════════════
 
-    if spice_rows.empty:
-        return None, None, "No data for this spice."
+def tab_market_overview(df: pd.DataFrame, metadata: dict):
+    """MoneyControl-style market overview — ticker, gainers/losers, volume, heatmap."""
+    ds_end   = df["date"].max()
+    latest   = df[df["date"] == ds_end].copy()
+    prev_day = df[df["date"] == df[df["date"] < ds_end]["date"].max()].copy() if len(df["date"].unique()) > 1 else latest.copy()
 
-    ds_start = spice_rows.iloc[0]["date"]
-    ds_end   = spice_rows.iloc[-1]["date"]
-
-    exact = spice_rows[spice_rows["date"] == anchor_ts]
-    if not exact.empty:
-        return exact.iloc[0], anchor_ts, f"Exact date {anchor_date_str} found in dataset."
-
-    if anchor_ts < ds_start:
-        return None, None, (
-            f"Date {anchor_date_str} is before dataset start "
-            f"({ds_start.strftime('%Y-%m-%d')}). Please choose a later date."
-        )
-
-    if anchor_ts > ds_end:
-        row = spice_rows.iloc[-1]
-        used = row["date"]
-        return row, used, (
-            f"⚠️ {anchor_date_str} is beyond the dataset (ends {ds_end.strftime('%Y-%m-%d')}). "
-            f"Using latest available context: **{used.strftime('%Y-%m-%d')}**."
-        )
-
-    earlier = spice_rows[spice_rows["date"] <= anchor_ts]
-    row     = earlier.iloc[-1]
-    used    = row["date"]
-    return row, used, (
-        f"No shipments recorded for {spice} on {anchor_date_str}. "
-        f"Using nearest earlier date with data: **{used.strftime('%Y-%m-%d')}**."
+    # Merge with previous day for day-change
+    mrg = latest.merge(
+        prev_day[["Spice Name", "price_per_kg_inr_vwap"]].rename(
+            columns={"price_per_kg_inr_vwap": "prev_vwap"}),
+        on="Spice Name", how="left"
     )
+    mrg["day_chg_pct"] = (mrg["price_per_kg_inr_vwap"] / mrg["prev_vwap"] - 1) * 100
+    mrg["day_chg_pct"] = mrg["day_chg_pct"].fillna(mrg["price_momentum_1d"] * 100)
 
-
-# ── UI ─────────────────────────────────────────────────────────────────────────
-def main():
-    bundle, metadata = load_model()
-    df               = load_data()
-
-    spices    = sorted(metadata["spices"])
-    ds_start  = df["date"].min().strftime("%Y-%m-%d")
-    ds_end    = df["date"].max().strftime("%Y-%m-%d")
-
-    # ── Header ────────────────────────────────────────────────────────────────
-    st.title("🌶️ Turmerix — Indian Spice Price Forecast")
+    # ── Ticker strip ──────────────────────────────────────────────────────────
+    ticker_items = []
+    for _, r in mrg.sort_values("daily_volume_kg", ascending=False).head(12).iterrows():
+        sp    = r["Spice Name"]
+        price = r["price_per_kg_inr_vwap"]
+        chg   = r["day_chg_pct"]
+        cls   = pct_color(chg)
+        arr   = pct_arrow(chg)
+        emoji = SPICE_EMOJI.get(sp, "🌿")
+        ticker_items.append(
+            f'<span class="ticker-item">'
+            f'<span class="ticker-name">{emoji} {sp}</span>'
+            f'<span class="ticker-price">₹{price:,.1f}</span>'
+            f'<span class="{cls}">{arr} {chg:+.1f}%</span>'
+            f'</span>'
+        )
     st.markdown(
-        "Predict future VWAP prices for Indian export spices and get a **Buy / Sell / Hold** signal. "
-        f"Dataset: May–June 2025 · {len(spices)} spices · LightGBM time-series model"
+        f'<div class="ticker-wrap">{"".join(ticker_items)}</div>',
+        unsafe_allow_html=True
     )
+
+    # ── Market summary KPIs ───────────────────────────────────────────────────
+    total_vol   = mrg["daily_volume_kg"].sum()
+    n_gainers   = (mrg["day_chg_pct"] > 0.5).sum()
+    n_losers    = (mrg["day_chg_pct"] < -0.5).sum()
+    avg_chg     = mrg["day_chg_pct"].mean()
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("📦 Total Export Volume", f"{total_vol/1e6:.2f}M kg",
+              help="Sum of all spice volumes on latest date")
+    c2.metric("🟢 Gainers", f"{n_gainers} spices")
+    c3.metric("🔴 Losers", f"{n_losers} spices")
+    c4.metric("📊 Avg Day Change", fmt_pct(avg_chg),
+              delta_color="normal")
+
     st.divider()
 
-    # ── Sidebar ───────────────────────────────────────────────────────────────
-    with st.sidebar:
-        st.header("⚙️ Forecast Settings")
+    # ── Top Gainers & Losers ──────────────────────────────────────────────────
+    col_g, col_l = st.columns(2)
 
-        spice = st.selectbox("Spice", spices, index=spices.index("Cumin"))
+    with col_g:
+        st.subheader("🚀 Top Gainers")
+        gainers = mrg.nlargest(8, "day_chg_pct")[
+            ["Spice Name", "price_per_kg_inr_vwap", "day_chg_pct", "daily_volume_kg"]
+        ].copy()
+        gainers.columns = ["Spice", "Price (₹/kg)", "Day Chg %", "Volume (kg)"]
+        gainers["Day Chg %"] = gainers["Day Chg %"].apply(fmt_pct)
+        gainers["Price (₹/kg)"] = gainers["Price (₹/kg)"].apply(lambda x: f"₹{x:,.2f}")
+        gainers["Volume (kg)"]  = gainers["Volume (kg)"].apply(lambda x: f"{x/1000:.1f}K")
+        st.dataframe(gainers, use_container_width=True, hide_index=True)
 
+    with col_l:
+        st.subheader("📉 Top Losers")
+        losers = mrg.nsmallest(8, "day_chg_pct")[
+            ["Spice Name", "price_per_kg_inr_vwap", "day_chg_pct", "daily_volume_kg"]
+        ].copy()
+        losers.columns = ["Spice", "Price (₹/kg)", "Day Chg %", "Volume (kg)"]
+        losers["Day Chg %"] = losers["Day Chg %"].apply(fmt_pct)
+        losers["Price (₹/kg)"] = losers["Price (₹/kg)"].apply(lambda x: f"₹{x:,.2f}")
+        losers["Volume (kg)"]  = losers["Volume (kg)"].apply(lambda x: f"{x/1000:.1f}K")
+        st.dataframe(losers, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # ── Volume Leaders ────────────────────────────────────────────────────────
+    st.subheader("📦 Volume Leaders (Today)")
+    vol_df = mrg.nlargest(10, "daily_volume_kg")[["Spice Name", "daily_volume_kg", "price_per_kg_inr_vwap", "day_chg_pct"]].copy()
+    vol_df.columns = ["Spice", "Volume (kg)", "VWAP (₹/kg)", "Day Chg %"]
+    st.bar_chart(vol_df.set_index("Spice")["Volume (kg)"], use_container_width=True)
+
+    st.divider()
+
+    # ── Full Market Snapshot table ────────────────────────────────────────────
+    st.subheader("📋 Full Market Snapshot")
+    snap = mrg[[
+        "Spice Name", "price_per_kg_inr_vwap", "day_chg_pct",
+        "price_momentum_7d", "rolling7_avg_price",
+        "rolling7_price_std", "daily_volume_kg", "daily_shipment_count",
+        "daily_buyer_count"
+    ]].copy().sort_values("daily_volume_kg", ascending=False)
+
+    snap.columns = [
+        "Spice", "VWAP ₹/kg", "Day %", "7d Mom %",
+        "7d Avg Price", "7d Volatility", "Volume (kg)", "Shipments", "Countries"
+    ]
+    snap["VWAP ₹/kg"]   = snap["VWAP ₹/kg"].apply(lambda x: f"₹{x:,.2f}")
+    snap["Day %"]        = snap["Day %"].apply(lambda x: f"{x:+.1f}%" if pd.notna(x) else "—")
+    snap["7d Mom %"]     = snap["7d Mom %"].apply(lambda x: f"{x*100:+.1f}%" if pd.notna(x) else "—")
+    snap["7d Avg Price"] = snap["7d Avg Price"].apply(lambda x: f"₹{x:,.2f}" if pd.notna(x) else "—")
+    snap["7d Volatility"]= snap["7d Volatility"].apply(lambda x: f"₹{x:,.2f}" if pd.notna(x) else "—")
+    snap["Volume (kg)"]  = snap["Volume (kg)"].apply(lambda x: f"{x/1000:.1f}K" if pd.notna(x) else "—")
+    snap["Shipments"]    = snap["Shipments"].apply(lambda x: int(x) if pd.notna(x) else 0)
+    snap["Countries"]    = snap["Countries"].apply(lambda x: int(x) if pd.notna(x) else 0)
+
+    st.dataframe(snap, use_container_width=True, hide_index=True)
+    st.caption(f"Data as of {ds_end.strftime('%d %b %Y')} · May–June 2025 Indian spice export data")
+
+
+def tab_spice_detail(df: pd.DataFrame, metadata: dict):
+    """Deep-dive into one spice — price history, OHLC, volume, momentum."""
+    spices = sorted(metadata["spices"])
+
+    col_sel, col_period = st.columns([3, 2])
+    with col_sel:
+        spice = st.selectbox("Select spice", spices, index=spices.index("Cumin"), key="detail_spice")
+    with col_period:
+        period = st.radio("Period", ["All", "Last 30d", "Last 14d", "Last 7d"],
+                          horizontal=True, key="detail_period")
+
+    spice_df = df[df["Spice Name"] == spice].sort_values("date").copy()
+    if period == "Last 7d":
+        spice_df = spice_df.tail(7)
+    elif period == "Last 14d":
+        spice_df = spice_df.tail(14)
+    elif period == "Last 30d":
+        spice_df = spice_df.tail(30)
+
+    if spice_df.empty:
+        st.warning(f"No data for {spice}.")
+        return
+
+    latest = spice_df.iloc[-1]
+    first  = spice_df.iloc[0]
+    emoji  = SPICE_EMOJI.get(spice, "🌿")
+    per_spice_mape = metadata.get("per_spice_test_mape", {})
+    mape   = per_spice_mape.get(spice, metadata.get("test_mape", 0.0))
+    reliability = "🟢 High" if mape < 25 else ("🟡 Medium" if mape < 50 else "🔴 Low")
+
+    # ── Header KPIs ───────────────────────────────────────────────────────────
+    st.markdown(f"### {emoji} {spice}")
+    period_chg = (latest["price_per_kg_inr_vwap"] / first["price_per_kg_inr_vwap"] - 1) * 100 if first["price_per_kg_inr_vwap"] > 0 else 0
+
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Current VWAP", fmt_price(latest["price_per_kg_inr_vwap"]))
+    c2.metric("Period Change", fmt_pct(period_chg), delta=fmt_pct(period_chg))
+    c3.metric("7d Avg Price", fmt_price(latest["rolling7_avg_price"]) if pd.notna(latest.get("rolling7_avg_price")) else "—")
+    c4.metric("7d Volatility (σ)", fmt_price(latest["rolling7_price_std"]) if pd.notna(latest.get("rolling7_price_std")) else "—")
+    c5.metric(f"Forecast Reliability", reliability, delta=f"MAPE {mape:.1f}%", delta_color="off")
+
+    st.divider()
+
+    # ── Price history chart ───────────────────────────────────────────────────
+    st.subheader("📈 VWAP Price History")
+    price_chart = spice_df.set_index("date")[["price_per_kg_inr_vwap", "rolling7_avg_price"]].copy()
+    price_chart.columns = ["VWAP (₹/kg)", "7d Rolling Avg"]
+    st.line_chart(price_chart, use_container_width=True)
+
+    # ── Price range (High/Low band) ───────────────────────────────────────────
+    if "price_per_kg_inr_min" in spice_df.columns:
+        st.subheader("📊 Daily Price Range (High / Low)")
+        range_chart = spice_df.set_index("date")[["price_per_kg_inr_max", "price_per_kg_inr_vwap", "price_per_kg_inr_min"]].copy()
+        range_chart.columns = ["High", "VWAP", "Low"]
+        st.line_chart(range_chart, use_container_width=True)
+
+    col_v, col_m = st.columns(2)
+
+    # ── Volume chart ──────────────────────────────────────────────────────────
+    with col_v:
+        st.subheader("📦 Daily Export Volume (kg)")
+        vol_chart = spice_df.set_index("date")[["daily_volume_kg"]].dropna()
+        vol_chart.columns = ["Volume (kg)"]
+        st.bar_chart(vol_chart, use_container_width=True)
+
+    # ── Momentum chart ────────────────────────────────────────────────────────
+    with col_m:
+        st.subheader("⚡ Price Momentum")
+        mom_chart = spice_df.set_index("date")[["price_momentum_1d", "price_momentum_7d"]].dropna() * 100
+        mom_chart.columns = ["1-day Mom %", "7-day Mom %"]
+        st.line_chart(mom_chart, use_container_width=True)
+
+    # ── Volume shock ──────────────────────────────────────────────────────────
+    st.subheader("🔥 Volume Shock (daily vs 7d avg)")
+    shock = spice_df.set_index("date")[["volume_shock"]].dropna()
+    shock.columns = ["Volume Shock Ratio"]
+    st.line_chart(shock, use_container_width=True)
+    st.caption("Ratio > 1 = above-average shipment day. Ratio > 2 = significant demand spike.")
+
+    # ── Data table ────────────────────────────────────────────────────────────
+    with st.expander("📋 Raw daily data"):
+        show_cols = ["date", "price_per_kg_inr_vwap", "price_per_kg_inr_min",
+                     "price_per_kg_inr_max", "daily_volume_kg", "daily_shipment_count",
+                     "daily_buyer_count", "rolling7_avg_price", "volume_shock"]
+        tbl = spice_df[[c for c in show_cols if c in spice_df.columns]].copy()
+        tbl["date"] = tbl["date"].dt.strftime("%Y-%m-%d")
+        st.dataframe(tbl, use_container_width=True, hide_index=True)
+
+
+def tab_forecast(df: pd.DataFrame, bundle, metadata: dict):
+    """Price forecast with buy/sell/hold signal."""
+    spices = sorted(metadata["spices"])
+    ds_end = df["date"].max().strftime("%Y-%m-%d")
+    per_spice_mape = metadata.get("per_spice_test_mape", {})
+
+    st.subheader("🔮 Price Forecast & Buy/Sell/Hold Signal")
+
+    c1, c2, c3 = st.columns([2, 2, 2])
+    with c1:
+        spice = st.selectbox("Spice", spices, index=spices.index("Cumin"), key="fc_spice")
+    with c2:
         anchor_date = st.date_input(
-            "Anchor date (today's context)",
+            "Anchor date",
             value=pd.Timestamp(ds_end).date(),
-            help=f"Dataset covers {ds_start} – {ds_end}. Future dates fall back to latest available.",
+            help="Dataset: May–June 2025. Future dates auto-fallback to latest.",
+            key="fc_date"
         ).strftime("%Y-%m-%d")
-
-        horizon_label = st.radio(
-            "Forecast horizon",
-            options=["7d — 1 week", "1m — 30 days", "3m — 90 days", "1y — 365 days"],
-            index=0,
+    with c3:
+        horizon_label = st.selectbox(
+            "Horizon",
+            ["7d — 1 week", "1m — 30 days", "3m — 90 days", "1y — 365 days"],
+            key="fc_horizon"
         )
         horizon_key = horizon_label.split(" ")[0]
 
-        st.divider()
-        per_spice_mape = metadata.get("per_spice_test_mape", {})
-        mape = per_spice_mape.get(spice, metadata.get("test_mape", 0.0))
-        st.metric("Spice MAPE (test)", f"{mape:.1f}%", help="Lower = more reliable signal")
-        st.caption(
-            "MAPE < 25% → reliable signal\n\n"
-            "MAPE 25–50% → directional only\n\n"
-            "MAPE > 50% → treat as very approximate"
-        )
-
-        run = st.button("🔮 Run Forecast", use_container_width=True, type="primary")
-
-    # ── Main panel ────────────────────────────────────────────────────────────
+    run = st.button("🔮 Run Forecast", type="primary", use_container_width=True)
     if not run:
-        st.info("Select a spice and horizon in the sidebar, then click **Run Forecast**.")
+        mape = per_spice_mape.get(spice, metadata.get("test_mape", 0.0))
+        rel  = "🟢 High (reliable signal)" if mape < 25 else ("🟡 Medium (directional only)" if mape < 50 else "🔴 Low (treat as approximate)")
+        st.info(f"**{spice}** — Model reliability: {rel} · MAPE = {mape:.1f}%")
 
-        # Show quick reference table
-        st.subheader("📋 Spice reliability guide")
+        st.markdown("##### 📋 All-spice reliability guide")
         mape_df = (
-            pd.DataFrame(per_spice_mape.items(), columns=["Spice", "Test MAPE (%)"])
-            .sort_values("Test MAPE (%)")
+            pd.DataFrame(per_spice_mape.items(), columns=["Spice", "MAPE (%)"])
+            .sort_values("MAPE (%)")
             .reset_index(drop=True)
         )
-        mape_df["Reliability"] = mape_df["Test MAPE (%)"].apply(
+        mape_df["Reliability"] = mape_df["MAPE (%)"].apply(
             lambda x: "🟢 High" if x < 25 else ("🟡 Medium" if x < 50 else "🔴 Low")
         )
         st.dataframe(mape_df, use_container_width=True, hide_index=True)
         return
 
-    # ── Resolve date → row ────────────────────────────────────────────────────
-    row, used_date, context_note = resolve_row(df, spice, anchor_date)
-
+    row, used_date, note = resolve_row(df, spice, anchor_date)
     if row is None:
-        st.error(context_note)
+        st.error(note)
         return
+    if note:
+        st.warning(note)
 
-    if anchor_date != (used_date.strftime("%Y-%m-%d") if hasattr(used_date, "strftime") else str(used_date)):
-        st.warning(context_note)
-    else:
-        st.success(context_note)
-
-    # ── Run forecast ──────────────────────────────────────────────────────────
-    horizon_days = resolve_horizon(horizon_key)
+    horizon_days  = resolve_horizon(horizon_key)
     used_date_str = used_date.strftime("%Y-%m-%d") if hasattr(used_date, "strftime") else str(used_date)
 
     with st.spinner(f"Forecasting {horizon_days} days for {spice}…"):
         result = run_forecast(bundle, metadata, row, spice, horizon_days, used_date_str)
 
-    # ── KPI row ───────────────────────────────────────────────────────────────
-    sig_icon = SIGNAL_COLOR.get(result["signal"], "⚪")
-    trend_icon = TREND_ICON.get(result["trend"], "")
+    # ── KPI strip ─────────────────────────────────────────────────────────────
+    emoji = SPICE_EMOJI.get(spice, "🌿")
+    st.markdown(f"#### {emoji} {spice} — {horizon_days}-day Outlook")
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Anchor price (INR/kg)", f"₹{result['anchor_price']:,.2f}")
-    col2.metric(
-        f"Final price ({horizon_days}d)",
-        f"₹{result['forecast'][-1]['predicted_vwap_inr']:,.2f}",
-        delta=f"{result['final_pct']:+.1f}%",
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("Anchor Price", fmt_price(result["anchor_price"]))
+    k2.metric(f"Forecast End ({horizon_days}d)",
+              fmt_price(result["forecast"][-1]["predicted_vwap_inr"]),
+              delta=fmt_pct(result["final_pct"]))
+    k3.metric("Avg Forecast", fmt_price(result["avg_price"]))
+    k4.metric("Range", f"₹{result['min_price']:,.0f} – ₹{result['max_price']:,.0f}")
+    k5.metric("Model MAPE", f"{result['spice_mape']:.1f}%",
+              delta="reliable" if result["spice_mape"] < 25 else "indicative",
+              delta_color="off")
+
+    # ── Signal banner ─────────────────────────────────────────────────────────
+    sig  = result["signal"]
+    icon = result["icon"]
+    cls  = "signal-buy" if "BUY" in sig else ("signal-sell" if "SELL" in sig else "signal-hold")
+    trend_arrow = "📈" if result["trend"] == "upward" else ("📉" if result["trend"] == "downward" else "➡️")
+    st.markdown(
+        f'<div class="{cls}"><strong>{icon} {sig}</strong> {trend_arrow} &nbsp;|&nbsp; {result["reason"]}</div>',
+        unsafe_allow_html=True
     )
-    col3.metric("Avg forecast price", f"₹{result['avg_price']:,.2f}")
-    col4.metric(
-        "Signal",
-        f"{sig_icon} {result['signal']}",
-        delta=f"Trend: {trend_icon} {result['trend']}",
-        delta_color="off",
-    )
+    st.markdown("")
 
-    # ── Signal reasoning ─────────────────────────────────────────────────────
-    sig = result["signal"]
-    if sig == "BUY / HOLD STOCK":
-        st.success(f"**{sig_icon} {sig}** — {result['reason']}")
-    elif sig == "SELL / LIQUIDATE":
-        st.error(f"**{sig_icon} {sig}** — {result['reason']}")
-    else:
-        st.warning(f"**{sig_icon} {sig}** — {result['reason']}")
+    # ── Forecast chart ────────────────────────────────────────────────────────
+    fdf = pd.DataFrame(result["forecast"])
+    fdf["date"] = pd.to_datetime(fdf["date"])
 
-    # ── Price chart ───────────────────────────────────────────────────────────
-    st.subheader(f"📊 {spice} — {horizon_days}-day VWAP forecast")
+    # Historical context + forecast combined
+    hist = df[df["Spice Name"] == spice].sort_values("date").tail(14)[["date", "price_per_kg_inr_vwap"]].copy()
+    hist.columns = ["date", "Historical VWAP"]
+    hist = hist.set_index("date")
 
-    forecast_df = pd.DataFrame(result["forecast"])
-    forecast_df["date"] = pd.to_datetime(forecast_df["date"])
-    forecast_df = forecast_df.set_index("date")
+    fc_chart = fdf.set_index("date")[["predicted_vwap_inr"]].copy()
+    fc_chart.columns = ["Forecast VWAP"]
 
-    # Prepend anchor point so chart starts from today
-    anchor_row = pd.DataFrame(
-        {"predicted_vwap_inr": [result["anchor_price"]], "pct_change_vs_today": [0.0]},
-        index=[pd.Timestamp(used_date_str)],
-    )
-    chart_df = pd.concat([anchor_row, forecast_df])
+    combined = hist.join(fc_chart, how="outer")
+    st.line_chart(combined, use_container_width=True)
 
-    st.line_chart(chart_df["predicted_vwap_inr"], use_container_width=True)
+    # ── % change chart ────────────────────────────────────────────────────────
+    pct_chart = fdf.set_index("date")[["pct_change_vs_today"]].copy()
+    pct_chart.columns = ["% Change vs Anchor"]
+    st.area_chart(pct_chart, use_container_width=True)
 
-    # ── Min/max band ─────────────────────────────────────────────────────────
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Min forecast", f"₹{result['min_price']:,.2f}")
-    c2.metric("Max forecast", f"₹{result['max_price']:,.2f}")
-    c3.metric("Price range", f"₹{result['max_price'] - result['min_price']:,.2f}")
-
-    # ── Detailed table ────────────────────────────────────────────────────────
+    # ── Day-by-day table ──────────────────────────────────────────────────────
     with st.expander("📋 Day-by-day forecast table"):
-        display_df = forecast_df.reset_index().rename(columns={
+        tbl = fdf.rename(columns={
             "date": "Date",
-            "predicted_vwap_inr": "Predicted VWAP (INR/kg)",
-            "pct_change_vs_today": "% Change vs Anchor",
-        })
-        display_df["Date"] = display_df["Date"].dt.strftime("%Y-%m-%d")
-        display_df["% Change vs Anchor"] = display_df["% Change vs Anchor"].apply(
-            lambda x: f"{x:+.2f}%"
-        )
-        st.dataframe(display_df, use_container_width=True, hide_index=True)
+            "predicted_vwap_inr": "Forecast VWAP (₹/kg)",
+            "pct_change_vs_today": "% vs Anchor"
+        }).copy()
+        tbl["Date"]                 = tbl["Date"].dt.strftime("%Y-%m-%d")
+        tbl["Forecast VWAP (₹/kg)"] = tbl["Forecast VWAP (₹/kg)"].apply(lambda x: f"₹{x:,.2f}")
+        tbl["% vs Anchor"]          = tbl["% vs Anchor"].apply(fmt_pct)
+        st.dataframe(tbl, use_container_width=True, hide_index=True)
 
-    # ── Footer ────────────────────────────────────────────────────────────────
-    st.divider()
     st.caption(
-        f"Model: LightGBM auto-regressive time-series · "
-        f"Dataset: May–June 2025 Indian spice exports · "
-        f"Spice MAPE: {result['spice_mape']:.1f}% · "
-        "For indicative use only."
+        f"Auto-regressive LightGBM forecast · Dataset: May–June 2025 · "
+        f"Spice MAPE: {result['spice_mape']:.1f}% · For indicative use only."
     )
+
+
+def tab_compare(df: pd.DataFrame, metadata: dict):
+    """Overlay price & volume trends for multiple spices."""
+    spices = sorted(metadata["spices"])
+
+    selected = st.multiselect(
+        "Select spices to compare (2–6 recommended)",
+        spices,
+        default=["Cumin", "Turmeric", "Cardamom"],
+        key="cmp_spices"
+    )
+    metric = st.radio(
+        "Metric",
+        ["VWAP Price (₹/kg)", "Daily Volume (kg)", "7d Rolling Avg Price", "Price Momentum 7d (%)"],
+        horizontal=True,
+        key="cmp_metric"
+    )
+
+    if not selected:
+        st.info("Select at least one spice to compare.")
+        return
+
+    col_map = {
+        "VWAP Price (₹/kg)":         "price_per_kg_inr_vwap",
+        "Daily Volume (kg)":          "daily_volume_kg",
+        "7d Rolling Avg Price":       "rolling7_avg_price",
+        "Price Momentum 7d (%)":      "price_momentum_7d",
+    }
+    col = col_map[metric]
+
+    pivot = (
+        df[df["Spice Name"].isin(selected)]
+        .pivot_table(index="date", columns="Spice Name", values=col)
+        .sort_index()
+    )
+
+    if metric == "Price Momentum 7d (%)":
+        pivot = pivot * 100
+
+    st.subheader(f"📊 {metric} — Comparative View")
+    st.line_chart(pivot, use_container_width=True)
+
+    # ── Indexed to 100 (normalized) ───────────────────────────────────────────
+    if metric in ("VWAP Price (₹/kg)", "7d Rolling Avg Price"):
+        st.subheader("📐 Indexed Performance (Base = 100 on first day)")
+        base  = pivot.iloc[0]
+        normd = (pivot / base * 100).dropna(how="all")
+        st.line_chart(normd, use_container_width=True)
+        st.caption("All spices start at 100 — shows relative % gain/loss from start of period.")
+
+    # ── Latest snapshot comparison ────────────────────────────────────────────
+    st.subheader("📋 Latest Snapshot")
+    ds_end  = df["date"].max()
+    snap    = df[(df["Spice Name"].isin(selected)) & (df["date"] == ds_end)][
+        ["Spice Name", "price_per_kg_inr_vwap", "price_momentum_1d",
+         "price_momentum_7d", "daily_volume_kg", "rolling7_price_std"]
+    ].copy()
+    snap.columns = ["Spice", "VWAP ₹/kg", "1d Mom", "7d Mom", "Volume (kg)", "Volatility (σ)"]
+    snap["VWAP ₹/kg"]    = snap["VWAP ₹/kg"].apply(lambda x: f"₹{x:,.2f}")
+    snap["1d Mom"]        = snap["1d Mom"].apply(lambda x: f"{x*100:+.1f}%" if pd.notna(x) else "—")
+    snap["7d Mom"]        = snap["7d Mom"].apply(lambda x: f"{x*100:+.1f}%" if pd.notna(x) else "—")
+    snap["Volume (kg)"]   = snap["Volume (kg)"].apply(lambda x: f"{x/1000:.1f}K" if pd.notna(x) else "—")
+    snap["Volatility (σ)"]= snap["Volatility (σ)"].apply(lambda x: f"₹{x:,.2f}" if pd.notna(x) else "—")
+    st.dataframe(snap, use_container_width=True, hide_index=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# MAIN
+# ══════════════════════════════════════════════════════════════════════════════
+def main():
+    bundle, metadata = load_model()
+    df               = load_data()
+    ds_end           = df["date"].max().strftime("%d %b %Y")
+
+    # ── Header ────────────────────────────────────────────────────────────────
+    st.markdown(f"""
+    <div class="market-header">
+        <h1>🌶️ Turmerix — Indian Spice Market</h1>
+        <p>Live price intelligence · Export market analysis · AI-powered forecast &nbsp;·&nbsp; Data as of {ds_end}</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Navigation tabs ───────────────────────────────────────────────────────
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "🏠 Market Overview",
+        "🔍 Spice Detail",
+        "🔮 Forecast & Signal",
+        "📊 Compare Spices",
+    ])
+
+    with tab1:
+        tab_market_overview(df, metadata)
+
+    with tab2:
+        tab_spice_detail(df, metadata)
+
+    with tab3:
+        tab_forecast(df, bundle, metadata)
+
+    with tab4:
+        tab_compare(df, metadata)
 
 
 if __name__ == "__main__":

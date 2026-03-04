@@ -53,17 +53,28 @@ st.markdown("""
     background: #0d0d1a;
     border: 1px solid #1e3a5f;
     border-radius: 8px;
-    padding: 0.5rem 1rem;
+    padding: 0.4rem 0;
     overflow: hidden;
     white-space: nowrap;
     margin-bottom: 1rem;
 }
-.ticker-item { display: inline-block; margin-right: 2.5rem; font-size: 0.82rem; }
+.ticker-track {
+    display: inline-block;
+    animation: ticker-scroll 40s linear infinite;
+    white-space: nowrap;
+}
+.ticker-track:hover { animation-play-state: paused; }
+@keyframes ticker-scroll {
+    0%   { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+}
+.ticker-item { display: inline-block; margin-right: 2.5rem; font-size: 0.82rem; padding: 0 0.5rem; }
 .ticker-name { color: #a8b2d8; font-weight: 600; }
 .ticker-price { color: #e2e8f0; margin: 0 0.3rem; }
 .ticker-up   { color: #22c55e; }
 .ticker-down { color: #ef4444; }
 .ticker-flat { color: #94a3b8; }
+.ticker-sep  { color: #2d4a6e; margin-right: 2.5rem; }
 
 /* KPI cards */
 .kpi-card {
@@ -285,8 +296,11 @@ def tab_market_overview(df: pd.DataFrame, metadata: dict):
             f'<span class="{cls}">{arr} {chg:+.1f}%</span>'
             f'</span>'
         )
+    items_html = "".join(ticker_items)
     st.markdown(
-        f'<div class="ticker-wrap">{"".join(ticker_items)}</div>',
+        f'<div class="ticker-wrap">'
+        f'<span class="ticker-track">{items_html}{items_html}</span>'
+        f'</div>',
         unsafe_allow_html=True
     )
 

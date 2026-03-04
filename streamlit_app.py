@@ -296,12 +296,14 @@ def tab_market_overview(df: pd.DataFrame, metadata: dict):
     n_losers    = (mrg["day_chg_pct"] < -0.5).sum()
     avg_chg     = mrg["day_chg_pct"].mean()
 
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("📦 Total Export Volume", f"{total_vol/1e6:.2f}M kg",
               help="Sum of all spice volumes on latest date")
     c2.metric("🟢 Gainers", f"{n_gainers} spices")
     c3.metric("🔴 Losers", f"{n_losers} spices")
     c4.metric("📊 Avg Day Change", fmt_pct(avg_chg),
+              delta_color="normal")
+    c5.metric("📅 Data Date", ds_end.strftime("%Y-%m-%d"),
               delta_color="normal")
 
     st.divider()

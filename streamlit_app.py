@@ -125,7 +125,7 @@ def fmt_price(v: float) -> str:
 
 
 def fmt_pct(v: float) -> str:
-    return f"{v:+.2f}%"
+    return "—" if pd.isna(v) else f"{v:+.2f}%"
 
 
 def pct_color(v: float) -> str:
@@ -286,14 +286,18 @@ def tab_market_overview(df: pd.DataFrame, metadata: dict):
         sp    = r["Spice Name"]
         price = r["price_per_kg_inr_vwap"]
         chg   = r["day_chg_pct"]
-        cls   = pct_color(chg)
-        arr   = pct_arrow(chg)
         emoji = SPICE_EMOJI.get(sp, "🌿")
+        if pd.isna(chg):
+            chg_html = '<span class="ticker-flat">─</span>'
+        else:
+            cls = pct_color(chg)
+            arr = pct_arrow(chg)
+            chg_html = f'<span class="{cls}">{arr} {chg:+.1f}%</span>'
         ticker_items.append(
             f'<span class="ticker-item">'
             f'<span class="ticker-name">{emoji} {sp}</span>'
             f'<span class="ticker-price">₹{price:,.1f}</span>'
-            f'<span class="{cls}">{arr} {chg:+.1f}%</span>'
+            f'{chg_html}'
             f'</span>'
         )
     items_html = "".join(ticker_items)

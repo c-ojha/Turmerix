@@ -697,6 +697,189 @@ def tab_compare(df: pd.DataFrame, metadata: dict):
     st.dataframe(snap, use_container_width=True, hide_index=True)
 
 
+def tab_insights(df: pd.DataFrame, metadata: dict):
+    """Data insights — price kings, volume leaders, volatility, trend analysis."""
+
+    st.subheader("💡 Market Insights & Data Analysis")
+    st.caption("Full-period analysis across all spices · May–June 2025")
+
+    # ── Compute per-spice summary stats ───────────────────────────────────────
+    stats = (
+        df.groupby("Spice Name")
+        .agg(
+            avg_price    = ("price_per_kg_inr_vwap",  "mean"),
+            max_price    = ("price_per_kg_inr_vwap",  "max"),
+            min_price    = ("price_per_kg_inr_vwap",  "min"),
+            avg_volatility = ("rolling7_price_std",   "mean"),
+            total_volume = ("daily_volume_kg",         "sum"),
+            avg_volume   = ("daily_volume_kg",         "mean"),
+            total_shipments = ("daily_shipment_count", "sum"),
+            active_days  = ("date",                    "count"),
+            avg_buyers   = ("daily_buyer_count",       "mean"),
+            avg_shock    = ("volume_shock",            "mean"),
+        )
+        .reset_index()
+    )
+    stats["price_range"]     = stats["max_price"] - stats["min_price"]
+    stats["price_range_pct"] = (stats["price_range"] / stats["min_price"] * 100).round(1)
+    stats["cv_pct"]          = (stats["avg_volatility"] / stats["avg_price"] * 100).round(1)  # coeff of variation
+
+    # Latest price & period return
+    first_price = df.groupby("Spice Name").apply(
+        lambda g: g.sort_values("date").dropna(subset=["price_per_kg_inr_vwap"]).iloc[0]["price_per_kg_inr_vwap"]
+        if not g.dropna(subset=["price_per_kg_inr_vwap"]).empty else np.nan
+    ).rename("first_price").reset_index()
+    last_price = df.groupby("Spice Name").apply(
+        lambda g: g.sort_values("date").dropna(subset=["price_per_kg_inr_vwap"]).iloc[-1]["price_per_kg_inr_vwap"]
+        if not g.dropna(subset=["price_per_kg_inr_vwap"]).empty else np.nan
+    ).rename("last_price").reset_index()
+    stats = stats.merge(first_price, on="Spice Name").merge(last_price, on="Spice Name")
+    stats["period_return_pct"] = ((stats["last_price"] / stats["first_price"] - 1) * 100).round(2)
+
+    per_spice_mape = metadata.get("per_spice_test_mape", {})
+    stats["forecast_mape"] = stats["Spice Name"].map(per_spice_mape)
+
+    # ── Section 1: Price Analysis ─────────────────────────────────────────────
+    st.markdown("### 💰 Price Analysis")
+    c1, c2, c3 = st.columns(3)
+
+    with c1:
+        st.markdown("**👑 Most Expensive (Avg VWAP)**")
+        top_price = stats.nlargest(8, "avg_price")[["Spice Name", "avg_price", "max_price", "min_price"]].copy()
+        top_price.columns = ["Spice", "Avg ₹/kg", "High ₹/kg", "Low ₹/kg"]
+        for col in ["Avg ₹/kg", "High ₹/kg", "Low ₹/kg"]:
+            top_price[col] = top_price[col].apply(lambda x: f"₹{x:,.2f}")
+        st.dataframe(top_price, use_container_width=True, hide_index=True)
+
+    with c2:
+        st.markdown("**📈 Best Period Return (May→Jun)**")
+        top_return = stats.nlargest(8, "period_return_pct")[["Spice Name", "period_return_pct", "first_price", "last_price"]].copy()
+        top_return.columns = ["Spice", "Return %", "Start ₹/kg", "End ₹/kg"]
+        top_return["Return %"]   = top_return["Return %"].apply(fmt_pct)
+        top_return["Start ₹/kg"] = top_return["Start ₹/kg"].apply(lambda x: f"₹{x:,.2f}")
+        top_return["End ₹/kg"]   = top_return["End ₹/kg"].apply(lambda x: f"₹{x:,.2f}")
+        st.dataframe(top_return, use_container_width=True, hide_index=True)
+
+    with c3:
+        st.markdown("**📉 Worst Period Return (May→Jun)**")
+        bot_return = stats.nsmallest(8, "period_return_pct")[["Spice Name", "period_return_pct", "first_price", "last_price"]].copy()
+        bot_return.columns = ["Spice", "Return %", "Start ₹/kg", "End ₹/kg"]
+        bot_return["Return %"]   = bot_return["Return %"].apply(fmt_pct)
+        bot_return["Start ₹/kg"] = bot_return["Start ₹/kg"].apply(lambda x: f"₹{x:,.2f}")
+        bot_return["End ₹/kg"]   = bot_return["End ₹/kg"].apply(lambda x: f"₹{x:,.2f}")
+        st.dataframe(bot_return, use_container_width=True, hide_index=True)
+
+    # Price range bar chart
+    st.markdown("**📊 Price Range per Spice (High − Low, entire period)**")
+    range_chart = stats.sort_values("price_range", ascending=False)[["Spice Name", "price_range"]].set_index("Spice Name")
+    range_chart.columns = ["Price Range ₹/kg"]
+    st.bar_chart(range_chart, use_container_width=True)
+
+    st.divider()
+
+    # ── Section 2: Volume Analysis ────────────────────────────────────────────
+    st.markdown("### 📦 Volume Analysis")
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.markdown("**🏆 Highest Total Export Volume**")
+        top_vol = stats.nlargest(10, "total_volume")[["Spice Name", "total_volume", "avg_volume", "total_shipments", "active_days"]].copy()
+        top_vol.columns = ["Spice", "Total (kg)", "Avg/Day (kg)", "Shipments", "Active Days"]
+        top_vol["Total (kg)"]    = top_vol["Total (kg)"].apply(lambda x: f"{x/1e6:.2f}M" if x >= 1e6 else f"{x/1000:.1f}K")
+        top_vol["Avg/Day (kg)"]  = top_vol["Avg/Day (kg)"].apply(lambda x: f"{x/1000:.1f}K")
+        top_vol["Shipments"]     = top_vol["Shipments"].astype(int)
+        top_vol["Active Days"]   = top_vol["Active Days"].astype(int)
+        st.dataframe(top_vol, use_container_width=True, hide_index=True)
+
+    with c2:
+        st.markdown("**🌍 Most International Reach (Avg Buyer Countries/Day)**")
+        top_buyers = stats.nlargest(10, "avg_buyers")[["Spice Name", "avg_buyers", "total_volume", "total_shipments"]].copy()
+        top_buyers.columns = ["Spice", "Avg Countries/Day", "Total Volume (kg)", "Shipments"]
+        top_buyers["Avg Countries/Day"] = top_buyers["Avg Countries/Day"].apply(lambda x: f"{x:.1f}")
+        top_buyers["Total Volume (kg)"] = top_buyers["Total Volume (kg)"].apply(lambda x: f"{x/1000:.1f}K")
+        top_buyers["Shipments"]         = top_buyers["Shipments"].astype(int)
+        st.dataframe(top_buyers, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # ── Section 3: Volatility Analysis ───────────────────────────────────────
+    st.markdown("### ⚡ Volatility & Risk Analysis")
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.markdown("**🌊 Most Volatile (7d Price Std Dev)**")
+        top_vol2 = stats.nlargest(10, "avg_volatility")[["Spice Name", "avg_volatility", "cv_pct", "price_range_pct", "avg_price"]].copy()
+        top_vol2.columns = ["Spice", "Avg σ (₹/kg)", "CV %", "Range %", "Avg Price"]
+        top_vol2["Avg σ (₹/kg)"] = top_vol2["Avg σ (₹/kg)"].apply(lambda x: f"₹{x:,.2f}" if pd.notna(x) else "—")
+        top_vol2["CV %"]         = top_vol2["CV %"].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "—")
+        top_vol2["Range %"]      = top_vol2["Range %"].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "—")
+        top_vol2["Avg Price"]    = top_vol2["Avg Price"].apply(lambda x: f"₹{x:,.2f}")
+        st.dataframe(top_vol2, use_container_width=True, hide_index=True)
+        st.caption("CV % = Coefficient of Variation (σ / avg price) — normalised volatility across spices")
+
+    with c2:
+        st.markdown("**🏔️ Most Stable (Lowest CV %)**")
+        stable = stats[stats["cv_pct"].notna()].nsmallest(10, "cv_pct")[["Spice Name", "cv_pct", "avg_volatility", "avg_price"]].copy()
+        stable.columns = ["Spice", "CV %", "Avg σ (₹/kg)", "Avg Price"]
+        stable["CV %"]        = stable["CV %"].apply(lambda x: f"{x:.1f}%")
+        stable["Avg σ (₹/kg)"]= stable["Avg σ (₹/kg)"].apply(lambda x: f"₹{x:,.2f}" if pd.notna(x) else "—")
+        stable["Avg Price"]   = stable["Avg Price"].apply(lambda x: f"₹{x:,.2f}")
+        st.dataframe(stable, use_container_width=True, hide_index=True)
+        st.caption("Low CV % = price predictable and consistent — safer for long-term contracts")
+
+    # Volatility bar chart
+    st.markdown("**📊 Coefficient of Variation % — all spices ranked**")
+    cv_chart = stats[stats["cv_pct"].notna()].sort_values("cv_pct", ascending=False)[["Spice Name", "cv_pct"]].set_index("Spice Name")
+    cv_chart.columns = ["Volatility CV %"]
+    st.bar_chart(cv_chart, use_container_width=True)
+
+    st.divider()
+
+    # ── Section 4: Volume Shock Ranking ──────────────────────────────────────
+    st.markdown("### 🔥 Demand Shock Analysis")
+    st.caption("Avg volume shock ratio: 1.0 = normal, >1.5 = frequent demand spikes")
+
+    shock_rank = stats[stats["avg_shock"].notna()].sort_values("avg_shock", ascending=False)[
+        ["Spice Name", "avg_shock", "total_volume", "avg_volume"]
+    ].copy()
+    shock_rank.columns = ["Spice", "Avg Shock Ratio", "Total Volume (kg)", "Avg Daily Vol (kg)"]
+    shock_chart = shock_rank.set_index("Spice")[["Avg Shock Ratio"]]
+    st.bar_chart(shock_chart, use_container_width=True)
+
+    shock_rank["Avg Shock Ratio"]    = shock_rank["Avg Shock Ratio"].apply(lambda x: f"{x:.2f}×")
+    shock_rank["Total Volume (kg)"]  = shock_rank["Total Volume (kg)"].apply(lambda x: f"{x/1000:.1f}K")
+    shock_rank["Avg Daily Vol (kg)"] = shock_rank["Avg Daily Vol (kg)"].apply(lambda x: f"{x/1000:.1f}K")
+
+    with st.expander("📋 Full shock ranking table"):
+        st.dataframe(shock_rank, use_container_width=True, hide_index=True)
+
+    st.divider()
+
+    # ── Section 5: Full Summary Table ────────────────────────────────────────
+    st.markdown("### 📋 Complete Spice Intelligence Summary")
+    summary = stats[[
+        "Spice Name", "avg_price", "period_return_pct", "avg_volatility",
+        "cv_pct", "total_volume", "total_shipments", "avg_buyers", "forecast_mape"
+    ]].copy().sort_values("total_volume", ascending=False)
+
+    summary.columns = [
+        "Spice", "Avg Price ₹/kg", "Period Return %", "Avg Volatility σ",
+        "CV %", "Total Volume (kg)", "Shipments", "Avg Countries", "Forecast MAPE %"
+    ]
+    summary["Avg Price ₹/kg"]   = summary["Avg Price ₹/kg"].apply(lambda x: f"₹{x:,.2f}")
+    summary["Period Return %"]  = summary["Period Return %"].apply(fmt_pct)
+    summary["Avg Volatility σ"] = summary["Avg Volatility σ"].apply(lambda x: f"₹{x:,.2f}" if pd.notna(x) else "—")
+    summary["CV %"]             = summary["CV %"].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "—")
+    summary["Total Volume (kg)"]= summary["Total Volume (kg)"].apply(lambda x: f"{x/1000:.1f}K")
+    summary["Shipments"]        = summary["Shipments"].astype(int)
+    summary["Avg Countries"]    = summary["Avg Countries"].apply(lambda x: f"{x:.1f}")
+    summary["Forecast MAPE %"]  = summary["Forecast MAPE %"].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "—")
+
+    st.dataframe(summary, use_container_width=True, hide_index=True)
+    st.caption("Sorted by total export volume · May–June 2025 Indian spice export data")
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # MAIN
 # ══════════════════════════════════════════════════════════════════════════════
@@ -714,11 +897,12 @@ def main():
     """, unsafe_allow_html=True)
 
     # ── Navigation tabs ───────────────────────────────────────────────────────
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "🏠 Market Overview",
         "🔍 Spice Detail",
         "🔮 Forecast & Signal",
         "📊 Compare Spices",
+        "💡 Insights",
     ])
 
     with tab1:
@@ -732,6 +916,9 @@ def main():
 
     with tab4:
         tab_compare(df, metadata)
+
+    with tab5:
+        tab_insights(df, metadata)
 
 
 if __name__ == "__main__":

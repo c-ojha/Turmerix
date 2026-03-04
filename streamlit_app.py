@@ -306,7 +306,7 @@ def tab_market_overview(df: pd.DataFrame, metadata: dict):
 
     st.divider()
 
-    # ── Top Gainers & Losers ──────────────────────────────────────────────────
+    # ── Row 1: Top Gainers & Losers ───────────────────────────────────────────
     col_g, col_l = st.columns(2)
 
     with col_g:
@@ -315,7 +315,7 @@ def tab_market_overview(df: pd.DataFrame, metadata: dict):
             ["Spice Name", "price_per_kg_inr_vwap", "day_chg_pct", "daily_volume_kg"]
         ].copy()
         gainers.columns = ["Spice", "Price (₹/kg)", "Day Chg %", "Volume (kg)"]
-        gainers["Day Chg %"] = gainers["Day Chg %"].apply(fmt_pct)
+        gainers["Day Chg %"]    = gainers["Day Chg %"].apply(fmt_pct)
         gainers["Price (₹/kg)"] = gainers["Price (₹/kg)"].apply(lambda x: f"₹{x:,.2f}")
         gainers["Volume (kg)"]  = gainers["Volume (kg)"].apply(lambda x: f"{x/1000:.1f}K")
         st.dataframe(gainers, use_container_width=True, hide_index=True)
@@ -326,14 +326,49 @@ def tab_market_overview(df: pd.DataFrame, metadata: dict):
             ["Spice Name", "price_per_kg_inr_vwap", "day_chg_pct", "daily_volume_kg"]
         ].copy()
         losers.columns = ["Spice", "Price (₹/kg)", "Day Chg %", "Volume (kg)"]
-        losers["Day Chg %"] = losers["Day Chg %"].apply(fmt_pct)
+        losers["Day Chg %"]    = losers["Day Chg %"].apply(fmt_pct)
         losers["Price (₹/kg)"] = losers["Price (₹/kg)"].apply(lambda x: f"₹{x:,.2f}")
         losers["Volume (kg)"]  = losers["Volume (kg)"].apply(lambda x: f"{x/1000:.1f}K")
         st.dataframe(losers, use_container_width=True, hide_index=True)
 
     st.divider()
 
-    # ── Volume Leaders ────────────────────────────────────────────────────────
+    # ── Row 2: Most Active & Volume Shockers ─────────────────────────────────
+    col_a, col_s = st.columns(2)
+
+    with col_a:
+        st.subheader("🔥 Most Active")
+        st.caption("Highest export volume today — market depth leaders")
+        active = mrg.nlargest(8, "daily_volume_kg")[
+            ["Spice Name", "daily_volume_kg", "daily_shipment_count",
+             "daily_buyer_count", "price_per_kg_inr_vwap", "day_chg_pct"]
+        ].copy()
+        active.columns = ["Spice", "Volume (kg)", "Shipments", "Countries", "VWAP ₹/kg", "Day %"]
+        active["Volume (kg)"]  = active["Volume (kg)"].apply(lambda x: f"{x/1000:.1f}K")
+        active["VWAP ₹/kg"]   = active["VWAP ₹/kg"].apply(lambda x: f"₹{x:,.2f}")
+        active["Day %"]        = active["Day %"].apply(fmt_pct)
+        active["Shipments"]    = active["Shipments"].apply(lambda x: int(x) if pd.notna(x) else 0)
+        active["Countries"]    = active["Countries"].apply(lambda x: int(x) if pd.notna(x) else 0)
+        st.dataframe(active, use_container_width=True, hide_index=True)
+
+    with col_s:
+        st.subheader("⚡ Volume Shockers")
+        st.caption("Daily volume vs 7-day average — unusual demand spikes")
+        shock_df = mrg[mrg["volume_shock"].notna()].nlargest(8, "volume_shock")[
+            ["Spice Name", "volume_shock", "daily_volume_kg",
+             "price_per_kg_inr_vwap", "day_chg_pct"]
+        ].copy()
+        shock_df.columns = ["Spice", "Shock Ratio", "Volume (kg)", "VWAP ₹/kg", "Day %"]
+        shock_df["Shock Ratio"] = shock_df["Shock Ratio"].apply(lambda x: f"{x:.2f}×")
+        shock_df["Volume (kg)"] = shock_df["Volume (kg)"].apply(lambda x: f"{x/1000:.1f}K")
+        shock_df["VWAP ₹/kg"]  = shock_df["VWAP ₹/kg"].apply(lambda x: f"₹{x:,.2f}")
+        shock_df["Day %"]       = shock_df["Day %"].apply(fmt_pct)
+        st.dataframe(shock_df, use_container_width=True, hide_index=True)
+        st.caption("Shock Ratio > 2× = significant demand surge vs recent 7-day average")
+
+    st.divider()
+
+    # ── Volume Leaders chart ──────────────────────────────────────────────────
     st.subheader("📦 Volume Leaders (Today)")
     vol_df = mrg.nlargest(10, "daily_volume_kg")[["Spice Name", "daily_volume_kg", "price_per_kg_inr_vwap", "day_chg_pct"]].copy()
     vol_df.columns = ["Spice", "Volume (kg)", "VWAP (₹/kg)", "Day Chg %"]
